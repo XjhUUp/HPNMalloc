@@ -13,6 +13,8 @@
 #define RODOM_BLOCK 15000
 #define THREAD_NUM 10
 
+#define FILEPATH "/mnt/pmemdir/back"
+
 
 //测试小内存分配释放
 void small_malloc_test()
@@ -30,31 +32,36 @@ void small_malloc_test()
 
 //测试时钟分配算法
 void clock_allocate_test(){
-     printf("------clock_allocate_test------\n");
+     //printf("------clock_allocate_test------\n");
      void *addr;
-     for (int i = 64; i <= MAX_SMALL_BLOCK_SIZE-SPAN_SIZE; i += MIN_STORE_UNIT){
+    //  for (int i = 64; i <= MAX_SMALL_BLOCK_SIZE-SPAN_SIZE; i += MIN_STORE_UNIT){
+    //     int count=0;
+    //     for(int j=1;j<=10000;j++){
+    //         printf("-------------turn:%d----free:%d-----i:%d-------\n",j,count,i);
+    //         addr=hpnmalloc(i);
+    //         if(rand()%2==0){
+    //             hpnfree(addr);
+    //             count++;
+    //         }
+
+    //     }
+    //  }
+
         int count=0;
-        for(int j=1;j<=10000;j++){
-            printf("-------------turn:%d----free:%d-----i:%d-------\n",j,count,i);
-            addr=hpnmalloc(i);
+        for(int j=1;j<=20000;j++){
+            //printf("-------------turn:%d----free:%d------------\n",j,count);
+            addr=hpnmalloc(64);
+            memset(addr,0,64);
             if(rand()%2==0){
                 hpnfree(addr);
                 count++;
             }
+            // addr=0x600000001080;
+            // *addr=2;
+            // printf("val:%d\n",*addr);
+
 
         }
-     }
-
-        // int count=0;
-        // for(int j=1;j<=20000;j++){
-        //     printf("-------------turn:%d----free:%d------------\n",j,count);
-        //     addr=hpnmalloc(64);
-        //     if(rand()%2==0){
-        //         hpnfree(addr);
-        //         count++;
-        //     }
-
-        // }
 
 }
 
@@ -411,7 +418,7 @@ void multi_thread_test6()
 int main()
 {
     //small_malloc_test();
-    //clock_allocate_test();
+    clock_allocate_test();
     //large_malloc_test();
     //huge_malloc_test();
     //单线程测试
@@ -424,7 +431,7 @@ int main()
     //多线程测试
     // multi_thread_test1();
     // multi_thread_test2();
-     multi_thread_test3();
+    // multi_thread_test3();
     // multi_thread_test4();
     // multi_thread_test5();
     // multi_thread_test6();

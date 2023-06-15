@@ -26,8 +26,8 @@ extern "C" {
 
 #define SPAN_SIZE                   (sizeof(span_t))
 #define RAW_POOL_START              ((void*)((0x600000000000/PAGE_SIZE+1)*PAGE_SIZE))
-#define INITIAL_VIRTUAL_MEMORY      1024*1024 //1MB
-#define INITAL_PHY_MEMORY           1024*PAGE_SIZE
+#define INITIAL_VIRTUAL_MEMORY      1024*1024*1024 //1GB
+#define INITAL_PHY_MEMORY           1024*1024
 
 #define MIN_STORE_UNIT 64
 
@@ -98,6 +98,7 @@ struct central_pool{
     void *free_end;
     large_block_free_list_t lb_free_list[LARGE_BLOCK_NUM];
     int page_num;
+    int num_phy_extern;
 
 };
 

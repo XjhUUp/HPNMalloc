@@ -1,5 +1,6 @@
 #include "pthread.h"
 #include <math.h>
+#include <fcntl.h>
 #include "hpnmalloc.h"
 
 
@@ -22,6 +23,12 @@ int bitmap_auxiliary_array[32]={
 
 #define LOW1BIT(X) (bitmap_auxiliary_array[((unsigned int)(X * 0x077CB531U)) >> 27])
 
+#define FILEPATH "/mnt/pmemdir/back"
+
+int backfd;
+
+
+
 
 
 static void *page_alloc(void *pos, size_t size) {
@@ -40,6 +47,7 @@ static void central_pool_init(){
         fprintf(stderr, "fatal error: page_alloc ailed\n");
         exit(-1);
     }
+    central_pool.num_phy_extern=0;
     central_pool.pool_start=(void *)(((uint64_t)ret + PAGE_SIZE - 1)/PAGE_SIZE * PAGE_SIZE);
     central_pool.pool_end=ret+INITIAL_VIRTUAL_MEMORY;
     central_pool.free_start=central_pool.pool_start;
@@ -55,6 +63,10 @@ static void central_pool_init(){
 
 static void global_init(){
     //pthread_key_create(&destructor, thread_exit);
+    // backfd=open(FILEPATH,O_RDWR|O_CREAT, 0666);
+    // if(backfd<0){
+    //     fprintf(stderr, "unable to open file\n");
+    // }
     max_wc_couunt=0;
     central_pool_init();
     global_state=INITED;
@@ -90,19 +102,34 @@ static void check_init(){
 }
 
 static void central_pool_grow(){
-    //首先判断虚拟内存该不该扩展
-    printf("---1\n");
-    if(central_pool.free_start+INITAL_PHY_MEMORY>central_pool.pool_end){
-        void *addr=page_alloc(central_pool.pool_end,INITIAL_VIRTUAL_MEMORY);
-        if (addr < 0) {
-            fprintf(stderr, "page_alloc failed\n");
-            exit(-1);
-        }
-        central_pool.free_start=(void *)(((uint64_t)addr + PAGE_SIZE - 1)/PAGE_SIZE * PAGE_SIZE);
-        central_pool.pool_end=central_pool.pool_end+INITIAL_VIRTUAL_MEMORY;
-        central_pool.free_end=central_pool.pool_end;
+    void *addr=page_alloc(central_pool.pool_end,INITIAL_VIRTUAL_MEMORY);
+    if (addr < 0) {
+        fprintf(stderr, "page_alloc failed\n");
+        exit(-1);
     }
-    //扩展物理内存，首先判断文件是否存在，存在则扩展文件并映射，不存在则创建文件
+    central_pool.free_start=(void *)(((uint64_t)addr + PAGE_SIZE - 1)/PAGE_SIZE * PAGE_SIZE);
+    central_pool.pool_end=addr+INITIAL_VIRTUAL_MEMORY;
+    central_pool.free_end=central_pool.pool_end;
+
+
+
+    //首先判断虚拟内存该不该扩展.一旦扩展的话，如果下一个虚拟地址不是接下去的，那么前面剩余的虚拟地址和物理地址就会浪费
+    // if(central_pool.free_start+INITAL_PHY_MEMORY>central_pool.pool_end){
+    //     void *addr=page_alloc(central_pool.pool_end,INITIAL_VIRTUAL_MEMORY);
+    //     if (addr < 0) {
+    //         fprintf(stderr, "page_alloc failed\n");
+    //         exit(-1);
+    //     }
+    //     central_pool.pool_start=(void *)(((uint64_t)addr + PAGE_SIZE - 1)/PAGE_SIZE * PAGE_SIZE);
+    //     central_pool.pool_end=addr+INITIAL_VIRTUAL_MEMORY;
+    // }
+    // if(fallocate(backfd,0,central_pool.num_phy_extern*INITAL_PHY_MEMORY,INITAL_PHY_MEMORY)==-1){
+    //     fprintf(stderr, "fallocate failed\n");
+    // }
+    // mmap(central_pool.pool_start,INITAL_PHY_MEMORY,PROT_READ | PROT_WRITE, MAP_SHARED,backfd,central_pool.num_phy_extern*INITAL_PHY_MEMORY);
+    // central_pool.free_start=central_pool.pool_start;
+    // central_pool.free_end=central_pool.free_end+INITAL_PHY_MEMORY;
+    // central_pool.num_phy_extern+=1;
 }
 
 static void span_init(span_t *span, local_cache_t *local_cache,int index,uint8_t block_category){
@@ -179,7 +206,6 @@ static small_block_return_signal_t central_pool_acquire_small_block(int index){
     finsh:
         span=central_pool.free_start;
         span->wear_count=0;
-        //printf("span addr:%p\n",span);
         central_pool.free_start+=PAGE_SIZE*(index+1);
         small_block_return_signal.list=&(span->span_free_list);
         small_block_return_signal.flag=0;   //  连续
@@ -195,20 +221,15 @@ span_t *local_cache_replace_foreground(local_cache_t *lc,int index){
     span_t *span;
     if (!list_empty(&(lc->background[index]))){
         span=list_entry(lc->background[index].next,span_t,span_free_list);
-        //printf("back:%p span addr:%p  cur_pos:%d\n",lc->background[index].next,span,span->sl_block_t.sm_b.cur_pos);
         list_del(&span->span_free_list);
     }else if(!list_empty(&(lc->free_list))){
-        //printf("7\n");
-        //printf("11\n");
         span = list_entry(lc->free_list.next,span_t,span_free_list);
         list_del(&span->span_free_list);
         span_init(span,lc,index,index);
     }else{
-        //printf("12\n");
         small_block_return_signal_t small_block_return_signal= central_pool_acquire_small_block(Central_TO_Local_Page_Num-1);
         //0代表连续 1代表不连续 
         if(small_block_return_signal.flag==1){
-            //printf("9\n");
             span = list_entry(small_block_return_signal.list,span_t,span_free_list);
             span_init(span,lc,index,index);
             list_head *node=small_block_return_signal.list;
@@ -217,11 +238,8 @@ span_t *local_cache_replace_foreground(local_cache_t *lc,int index){
                 node=node->next;
             }
         }else{
-            //printf("10\n");
             span = list_entry(small_block_return_signal.list,span_t,span_free_list);
-            //printf("----central pool:%p  span:addr:%p---\n",central_pool.free_start,span);
             span_init(span,lc,index,index);
-            //printf("index:%d sl_block_t.sm_b.free_block_num:%d wear cout:%d  bitmap:%p\n",index,span->sl_block_t.sm_b.free_block_num,span->wear_count,span->sl_block_t.sm_b.bitmap);
             span_t *span_left=(void *)span+PAGE_SIZE;
             for(int i=1;i<Central_TO_Local_Page_Num;i++){
                 list_add_tail(&span_left->span_free_list,&lc->free_list);
@@ -236,10 +254,8 @@ span_t *local_cache_replace_foreground(local_cache_t *lc,int index){
         }else{
             temp=max_wc_couunt;
         }
-       // printf("temp:%d\n",temp);
         if(temp!=lc->local_cache_wc_threshold){
             lc->local_cache_wc_threshold=temp;
-            //printf("-----------");
             for(int i=0;i<SMALL_BLOCK_NUM;i++){
                 while(!list_empty(&lc->n_avaliable_list[i])){
                     list_head *node=lc->n_avaliable_list[i].next;
@@ -247,13 +263,6 @@ span_t *local_cache_replace_foreground(local_cache_t *lc,int index){
                     list_add_tail(node,&lc->background[i]);
 
                 }
-                // if(!list_empty(&lc->n_avaliable_list[i])){
-                //     list_head *node=lc->n_avaliable_list[i].next;
-                //     list_del(node);
-                //     list_add_tail(node,&lc->background[i]);
-                //     lc->n_avaliable_list[i].next=&lc->n_avaliable_list[i];
-                //     lc->n_avaliable_list[i].prev=&lc->n_avaliable_list[i];
-                // }
                 
             }
         }
@@ -267,7 +276,6 @@ void *span_clock_allocate(span_t* span,local_cache_t *lc){
     uint64_t bitmap=span->sl_block_t.sm_b.bitmap;
     int16_t cur_pos=span->sl_block_t.sm_b.cur_pos;
     uint16_t last_pos=span->sl_block_t.sm_b.last_pos;
-    //printf("span:%p sl_block_t.sm_b.free_block_num:%d wear cout:%d cur_pos:%d  bitmap:%p\n",span,span->sl_block_t.sm_b.free_block_num,span->wear_count,cur_pos,bitmap);
     uint64_t flag;
     uint64_t flag_a=0xFFFFFFFFFFFFFFFF;
     flag=flag_a<<cur_pos;
@@ -275,7 +283,6 @@ void *span_clock_allocate(span_t* span,local_cache_t *lc){
     if((cur_pos==last_pos)||(bitmap&flag)==0){
         span->wear_count+=1;
         if(span->wear_count>=lc->local_cache_wc_threshold){
-            //printf("span addr:%p  wear count:%d\n",span,span->wear_count);
             return NULL;
         }
         cur_pos=0;
@@ -289,26 +296,17 @@ void *span_clock_allocate(span_t* span,local_cache_t *lc){
         bitmap>>=32;
         cur_pos=LOW1BIT((bitmap&0x00000000FFFFFFFF))+32;
     }
-   // printf("threadhole6:%d\n",local_cache->local_cache_wc_threshold);
     span->sl_block_t.sm_b.cur_pos=cur_pos;
-    // printf("threadhole8:%d\n",local_cache->local_cache_wc_threshold);
-     printf("bitmap:%p  cur_pos:%d  free tatol:%d\n",span->sl_block_t.sm_b.bitmap,cur_pos,span->sl_block_t.sm_b.free_block_num);
     span->sl_block_t.sm_b.bitmap&=~((uint64_t)1<<(cur_pos-1));
-   // printf("threadhole：%p bitmap:%p threadhole：%p\n",local_cache->local_cache_wc_threshold,span->sl_block_t.sm_b.bitmap,local_cache->local_cache_wc_threshold);
-   // printf("threadhole7:%d\n",local_cache->local_cache_wc_threshold);
     return (void *)span+SPAN_SIZE+(cur_pos-1)*(span->block_category+1)*MIN_STORE_UNIT;
 }
 
 //达到阈值或者可用内存块用完返回NULL
 void *span_alloc_small_block(span_t *span,local_cache_t *lc,int index){
-    //printf("4\n");
     void *addr=NULL;
     int sizeof_smalloc_block=(span->block_category+1)*MIN_STORE_UNIT;
-    //printf("threadhole4:%d\n",local_cache->local_cache_wc_threshold);
     addr=span_clock_allocate(span,lc);
-   // printf("threadhole5:%d\n",local_cache->local_cache_wc_threshold);
     if(addr==NULL){
-       // printf("20\n");
         lc->foreground[index]=NULL;
         list_del(&span->span_free_list);
         list_add(&span->span_free_list,&lc->n_avaliable_list[index]);
@@ -316,7 +314,6 @@ void *span_alloc_small_block(span_t *span,local_cache_t *lc,int index){
     }
     span->sl_block_t.sm_b.free_block_num--;
     if(span->sl_block_t.sm_b.free_block_num==0){
-       // printf("21\n");
         lc->foreground[index]=NULL;
     }
     return addr;
@@ -324,37 +321,20 @@ void *span_alloc_small_block(span_t *span,local_cache_t *lc,int index){
 
 
 static void *small_malloc(size_t size){
-    //printf("central pool:%p\n",central_pool.free_start);
     void *addr;
     local_cache_t *lc=local_cache;
     span_t *span;
     int index=size/MIN_STORE_UNIT-1;
-
-    // list_head *node=local_cache->background[index].next;
-    // while(node!=&local_cache->background[index]){
-    //     printf("back:%p node:%p\n",&local_cache->background[index],node);
-    //     node=node->next;
-    // }
-
-    //printf("local:%p threadhole:%d\n",&local_cache,local_cache->local_cache_wc_threshold);
-
     if(lc->foreground[index]!=NULL){
-        //printf("1\n");
         span=lc->foreground[index];
     }else{
-       // printf("2\n");
         span=local_cache_replace_foreground(lc,index);
     }
     addr=span_alloc_small_block(span,lc,index);
     if(addr==NULL){
-       // printf("5\n");
         span=local_cache_replace_foreground(lc,index);
-       // printf("threadhole1:%d\n",local_cache->local_cache_wc_threshold);
-        //printf("span addr:%p\n",span);
         addr=span_alloc_small_block(span,lc,index);
-       // printf("threadhole3:%d\n",local_cache->local_cache_wc_threshold);
     }
-    printf("addr:%p\n",addr);
     return addr;
 }
 
@@ -405,6 +385,7 @@ void *hpnmalloc(size_t size){
     }else if(size<=MAX_LARGE_BLOCK_SIZE-SPAN_SIZE){
         addr=large_malloc(size);
     }
+    return addr;
 }
 
 static span_t *span_extract_header(void *ptr){
@@ -448,22 +429,15 @@ static void span_back_to_centralpool(span_t *span){
 
 
 static void small_free(span_t *span,void *ptr){
-    //printf("threadhole2:%d\n",local_cache->local_cache_wc_threshold);
-    //printf("31\n");
     local_cache_t *lc=local_cache;
     int size_of_small_block=(span->block_category+1)*MIN_STORE_UNIT;
     span->sl_block_t.sm_b.free_block_num+=1;
     int free_block_num=span->sl_block_t.sm_b.free_block_num;
-    //printf("span addr:%p ptr:%p\n",span,ptr);
     if(free_block_num==1){
-        //printf("30\n");
         //获取位示图的索引
         int index=((uint64_t)ptr-((uint64_t)span+SPAN_SIZE))/size_of_small_block+1;
-        //printf("index:%d\n",index);
         span->sl_block_t.sm_b.bitmap|=(uint64_t)1<<(index-1);
-       // printf("----------------------------------------------------span addr:%p----------\n",span);
         if(span->wear_count<lc->local_cache_wc_threshold){
-            //printf("span addr:%p\n",span);
             list_add_tail(&span->span_free_list,&lc->background[span->block_category]);
         }
     }else if(free_block_num==span->sl_block_t.sm_b.total_block_num){
@@ -474,19 +448,15 @@ static void small_free(span_t *span,void *ptr){
             span_back_to_centralpool(span);
             pthread_mutex_unlock(&central_pool.lock);
         }else{
-            //printf("lc->foreground[span->block_category]:%p  &(lc->foreground[span->block_category]):%p\n",lc->foreground[span->block_category],&(lc->foreground[span->block_category]));
             if(lc->foreground[span->block_category]==span){
-                 //printf("2\n");
                 lc->foreground[span->block_category]=NULL;
             }else{
-                //printf("3\n");
                 list_del(&span->span_free_list);
             }
             list_add_tail(&span->span_free_list,&lc->free_list);
         }
     }else{
         int index=((uint64_t)ptr-((uint64_t)span+SPAN_SIZE))/size_of_small_block+1;
-        //printf("%d\n",index);
         span->sl_block_t.sm_b.bitmap|=(uint64_t)1<<(index-1);
     }
 }
@@ -501,7 +471,6 @@ void *hpnfree(void *ptr){
         return;
     }
     span_t *span=span_extract_header(ptr);
-    //printf("----------free span addr:%p--------\n",span);
     if(span->block_category!=256){
         small_free(span,ptr);
     }else{
