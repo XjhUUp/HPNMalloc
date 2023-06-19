@@ -9,9 +9,9 @@ static const int debruijn[32] = {
 #define LOW1BIT(X) (debruijn[((unsigned int)(X * 0x077CB531U)) >> 27])
 
 int main(){
-uint64_t a=2;
-printf("%u\n",a&0x00000000FFFFFFFF);
-printf("%d\n",LOW1BIT((a&0x00000000FFFFFFFF)));
+uint64_t a=0x00000080;
+//printf("%u\n",a&0x00000000FFFFFFFF);
+printf("%d\n",LOW1BIT((a)));
 
 
 

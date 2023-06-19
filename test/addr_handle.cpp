@@ -15,9 +15,9 @@ int main(int argc, char **argv) {
         if((size_t)p%64!=0){
             p=(void *)p-((size_t)p%64);
         }
-        if((size_t)p%4096==0){
-            continue;
-        }
+        // if((size_t)p%4096==0){
+        //     continue;
+        // }
         mp[(size_t)p]++;
         total++;
     }

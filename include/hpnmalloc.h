@@ -26,9 +26,11 @@ extern "C" {
 
 #define SPAN_SIZE                   (sizeof(span_t))
 #define RAW_POOL_START              ((void*)((0x600000000000/PAGE_SIZE+1)*PAGE_SIZE))
+#define SPAN_HEAD_POOL_START        ((void*)(0x550000000000))
+
 #define INITIAL_VIRTUAL_MEMORY      1024*1024*1024 //1GB
 #define INITAL_PHY_MEMORY           1024*1024
-
+#define INITAL_SPAN_HEAD_PHY_MEMORY INITIAL_VIRTUAL_MEMORY/PAGE_SIZE*SPAN_SIZE  //16MB
 #define MIN_STORE_UNIT 64
 
 #define FIXED_THRESHOLD            10 
@@ -68,7 +70,7 @@ struct small_block_bitmap{
     uint16_t total_block_num;    //总的数据块数量
     uint16_t free_block_num;     //总的空闲块数量
     span_state_t state;
-    local_cache_t *local_cache;
+    //local_cache_t *local_cache;
 
 };
 
@@ -83,6 +85,8 @@ struct span{
         uint16_t page_num;
     }sl_block_t;
     int wear_count;             //磨损计数值
+
+    void *free_start;
 };
 
 struct large_block_free_list{
@@ -99,6 +103,9 @@ struct central_pool{
     large_block_free_list_t lb_free_list[LARGE_BLOCK_NUM];
     int page_num;
     int num_phy_extern;
+
+    //void *span_head_pool_start;
+    void *span_head_free_start;
 
 };
 

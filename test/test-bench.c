@@ -65,6 +65,23 @@ void clock_allocate_test(){
 
 }
 
+//测试结构体缓存
+void span_head_cache_test(){
+    printf("------span_head_cache_test------\n");
+    void *addr;
+    int count=0;
+    for(int j=1;j<=2000000;j++){
+        printf("-------------turn:%d----free:%d-----\n",j,count);
+        addr=hpnmalloc(64);
+        printf("addr:%p\n",addr);
+        memset(addr,0,64);
+        if(rand()%2==0){
+            hpnfree(addr);
+            count++;
+        }
+    }
+}
+
 //测试大内存分配释放
 void large_malloc_test()
 {
@@ -234,9 +251,10 @@ void *twork(void *arg)
     else if (flag == 3)
     {
         void *addr;
-        for (int j = 0; j < 10000; j++)
+        for (int j = 0; j < 300000; j++)
         {
             addr = hpnmalloc(64);
+            printf("addr:%p\n",addr);
             if (rand() % 2 == 0)
             {
                 hpnfree(addr);
@@ -329,14 +347,14 @@ void multi_thread_test3()
     printf("------multi thread test3------\n");
     pthread_t tid[100];
     int flag = 3 ;
-    for (int i = 0; i < THREAD_NUM; i++)
+    for (int i = 0; i < 10; i++)
     {
         if (pthread_create(&tid[i], NULL, &twork, &flag) < 0)
         {
             printf("pthread_create err\n");
         }
     }
-    for (int i = 0; i < THREAD_NUM; i++)
+    for (int i = 0; i < 10; i++)
     {
         if (pthread_join(tid[i], NULL) < 0)
         {
@@ -419,6 +437,7 @@ int main()
 {
     //small_malloc_test();
     clock_allocate_test();
+   // span_head_cache_test();
     //large_malloc_test();
     //huge_malloc_test();
     //单线程测试

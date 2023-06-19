@@ -9,7 +9,8 @@ pthread_once_t init_once = PTHREAD_ONCE_INIT;
 thread_state_t global_state = UNINIT;
 pthread_key_t destructor;
 
-central_pool_t central_pool;
+central_pool_t central_pool;    
+central_pool_t d_central_pool;
 
 int max_wc_couunt;
 
@@ -28,9 +29,6 @@ int bitmap_auxiliary_array[32]={
 int backfd;
 
 
-
-
-
 static void *page_alloc(void *pos, size_t size) {
     return mmap(pos, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
 }
@@ -38,17 +36,24 @@ static void *page_alloc(void *pos, size_t size) {
 
 
 static void central_pool_init(){
+    //首先在NVM中创建central_pool，然后再将central_pool复制到d_central_pool
+
+    
+
     if(pthread_mutex_init(&central_pool.lock,NULL)<0){
         fprintf(stderr, "fatal error: pthread_mutex_init failed\n");
         exit(-1);
     }
     void *ret=page_alloc(RAW_POOL_START,INITIAL_VIRTUAL_MEMORY);
-    if (ret < (int)0) {
+    void *span_head_addr=page_alloc(SPAN_HEAD_POOL_START,INITAL_SPAN_HEAD_PHY_MEMORY);
+    if ((ret < (int)0)||(span_head_addr < (int)0)) {
         fprintf(stderr, "fatal error: page_alloc ailed\n");
         exit(-1);
     }
+   // central_pool.span_head_pool_start=ret;
+    central_pool.span_head_free_start=span_head_addr;
     central_pool.num_phy_extern=0;
-    central_pool.pool_start=(void *)(((uint64_t)ret + PAGE_SIZE - 1)/PAGE_SIZE * PAGE_SIZE);
+    central_pool.pool_start=(void *)(((uint64_t)ret +PAGE_SIZE - 1)/PAGE_SIZE * PAGE_SIZE);
     central_pool.pool_end=ret+INITIAL_VIRTUAL_MEMORY;
     central_pool.free_start=central_pool.pool_start;
     //central_pool.free_end=central_pool.free_start;
@@ -88,6 +93,7 @@ static local_cache_t *acquire_local_cache(){
 
 static void thread_init(){
     pthread_setspecific(destructor, (void *)1);
+    //首先在NVM中创建线程缓存，然后再复制
     local_cache=acquire_local_cache();
     thread_state=INITED;
 }
@@ -103,10 +109,12 @@ static void check_init(){
 
 static void central_pool_grow(){
     void *addr=page_alloc(central_pool.pool_end,INITIAL_VIRTUAL_MEMORY);
-    if (addr < 0) {
+    void *span_head_addr=page_alloc(central_pool.span_head_free_start,INITAL_SPAN_HEAD_PHY_MEMORY);
+    if ((addr < 0)||(span_head_addr < 0)) {
         fprintf(stderr, "page_alloc failed\n");
         exit(-1);
     }
+    central_pool.span_head_free_start=span_head_addr;
     central_pool.free_start=(void *)(((uint64_t)addr + PAGE_SIZE - 1)/PAGE_SIZE * PAGE_SIZE);
     central_pool.pool_end=addr+INITIAL_VIRTUAL_MEMORY;
     central_pool.free_end=central_pool.pool_end;
@@ -134,7 +142,7 @@ static void central_pool_grow(){
 
 static void span_init(span_t *span, local_cache_t *local_cache,int index,uint8_t block_category){
     if(block_category!=256){
-        span->sl_block_t.sm_b.local_cache=local_cache;
+        //span->sl_block_t.sm_b.local_cache=local_cache;
         span->block_category=index;
         span->sl_block_t.sm_b.total_block_num=(PAGE_SIZE-SPAN_SIZE)/((index+1)*64);
         span->sl_block_t.sm_b.state=FORG;
@@ -151,8 +159,11 @@ static void span_init(span_t *span, local_cache_t *local_cache,int index,uint8_t
 
 static span_t* span_split(list_head *list_node,int cur_index,int target_index){
     span_t *span=list_entry(list_node,span_t,span_free_list);
-    span_t *span_s=(void *)span+target_index*PAGE_SIZE;
+    span_t *span_s=(void *)span+target_index*SPAN_SIZE;
     int list_index_s=cur_index-target_index-1;
+    span_s->free_start=span->free_start+target_index*PAGE_SIZE+SPAN_SIZE;
+    span_t *span_nvm=span->free_start+target_index*PAGE_SIZE;
+    span_nvm->free_start=span_s;
     span_init(span_s,NULL,list_index_s,256);
     if(span_s->wear_count==max_wc_couunt){
         list_add_tail(&span->span_free_list,&central_pool.lb_free_list[list_index_s].free_list); 
@@ -204,11 +215,16 @@ static small_block_return_signal_t central_pool_acquire_small_block(int index){
         }
         central_pool_grow();
     finsh:
-        span=central_pool.free_start;
+        //span=central_pool.free_start;
+        span=central_pool.span_head_free_start;
         span->wear_count=0;
+        span->free_start=central_pool.free_start+SPAN_SIZE;
         central_pool.free_start+=PAGE_SIZE*(index+1);
+        central_pool.span_head_free_start+=SPAN_SIZE*(index+1);
         small_block_return_signal.list=&(span->span_free_list);
         small_block_return_signal.flag=0;   //  连续
+        span_t *span_nvm= span->free_start-SPAN_SIZE;
+        span_nvm->free_start=span;
         break;
     }
     pthread_mutex_unlock(&central_pool.lock);
@@ -240,11 +256,14 @@ span_t *local_cache_replace_foreground(local_cache_t *lc,int index){
         }else{
             span = list_entry(small_block_return_signal.list,span_t,span_free_list);
             span_init(span,lc,index,index);
-            span_t *span_left=(void *)span+PAGE_SIZE;
+            //span_t *span_left=(void *)span+PAGE_SIZE;
+            span_t *span_left=(void *)span+SPAN_SIZE;
             for(int i=1;i<Central_TO_Local_Page_Num;i++){
                 list_add_tail(&span_left->span_free_list,&lc->free_list);
-                span_left=(void *)span_left+PAGE_SIZE;
-
+                span_left->free_start=span->free_start+PAGE_SIZE*i;
+                span_t *span_nvm=span_left->free_start-SPAN_SIZE;
+                span_nvm->free_start=span_left;
+                span_left=(void *)span_left+SPAN_SIZE;
             }
             
         }
@@ -287,6 +306,7 @@ void *span_clock_allocate(span_t* span,local_cache_t *lc){
         }
         cur_pos=0;
     }
+    //先把cur_pos之前的位置0，然后找出最低位的0，并把其他位置0，然乎查表
     flag=flag_a<<cur_pos;
     bitmap=bitmap&flag;
     bitmap=bitmap&(~bitmap+1);
@@ -298,7 +318,8 @@ void *span_clock_allocate(span_t* span,local_cache_t *lc){
     }
     span->sl_block_t.sm_b.cur_pos=cur_pos;
     span->sl_block_t.sm_b.bitmap&=~((uint64_t)1<<(cur_pos-1));
-    return (void *)span+SPAN_SIZE+(cur_pos-1)*(span->block_category+1)*MIN_STORE_UNIT;
+    //return (void *)span+SPAN_SIZE+(cur_pos-1)*(span->block_category+1)*MIN_STORE_UNIT;
+    return (void *)span->free_start+(cur_pos-1)*(span->block_category+1)*MIN_STORE_UNIT;
 }
 
 //达到阈值或者可用内存块用完返回NULL
@@ -308,7 +329,7 @@ void *span_alloc_small_block(span_t *span,local_cache_t *lc,int index){
     addr=span_clock_allocate(span,lc);
     if(addr==NULL){
         lc->foreground[index]=NULL;
-        list_del(&span->span_free_list);
+        //list_del(&span->span_free_list);
         list_add(&span->span_free_list,&lc->n_avaliable_list[index]);
         return NULL;
     }
@@ -335,6 +356,8 @@ static void *small_malloc(size_t size){
         span=local_cache_replace_foreground(lc,index);
         addr=span_alloc_small_block(span,lc,index);
     }
+    span_t *temp=span->free_start-SPAN_SIZE;
+    //printf("span:%p\n",span);
     return addr;
 }
 
@@ -359,9 +382,13 @@ static span_t* central_pool_acquire_large_block(int index){
     }
     central_pool_grow();
     finsh:
-        span=central_pool.free_start;
-        span->wear_count=0;
-        central_pool.free_start+=PAGE_SIZE*(index+1);    
+        span=central_pool.span_head_free_start;
+        span->free_start=central_pool.free_start+SPAN_SIZE;
+        span->wear_count=0;  
+        span_t *span_nvm=span->free_start-SPAN_SIZE;
+        span_nvm->free_start=span;
+        central_pool.free_start+=PAGE_SIZE*(index+1);
+        central_pool.span_head_free_start+=SPAN_SIZE*(index+1);
     pthread_mutex_unlock(&central_pool.lock);
     return span;
 }
@@ -389,10 +416,11 @@ void *hpnmalloc(size_t size){
 }
 
 static span_t *span_extract_header(void *ptr){
+
     span_t *span;
     uint64_t unaligned_address=(uint64_t)ptr%PAGE_SIZE;
     span=ptr-unaligned_address;
-    return span;
+    return span->free_start;
 }
 
 static void span_back_to_centralpool(span_t *span){
@@ -435,7 +463,7 @@ static void small_free(span_t *span,void *ptr){
     int free_block_num=span->sl_block_t.sm_b.free_block_num;
     if(free_block_num==1){
         //获取位示图的索引
-        int index=((uint64_t)ptr-((uint64_t)span+SPAN_SIZE))/size_of_small_block+1;
+        int index=((uint64_t)ptr-(uint64_t)span->free_start)/size_of_small_block+1;
         span->sl_block_t.sm_b.bitmap|=(uint64_t)1<<(index-1);
         if(span->wear_count<lc->local_cache_wc_threshold){
             list_add_tail(&span->span_free_list,&lc->background[span->block_category]);
@@ -456,7 +484,7 @@ static void small_free(span_t *span,void *ptr){
             list_add_tail(&span->span_free_list,&lc->free_list);
         }
     }else{
-        int index=((uint64_t)ptr-((uint64_t)span+SPAN_SIZE))/size_of_small_block+1;
+        int index=((uint64_t)ptr-(uint64_t)span->free_start)/size_of_small_block+1;
         span->sl_block_t.sm_b.bitmap|=(uint64_t)1<<(index-1);
     }
 }

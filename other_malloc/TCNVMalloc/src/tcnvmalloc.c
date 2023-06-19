@@ -137,7 +137,13 @@ static void maps_init() {
 
 static void thread_exit() {
     //TODO: reclaim the memory space in local_heap
+    printf("exit\n");
     free(local_heap);
+}
+
+void cleanup(){
+    printf("central pool free start:%p\n",gpool.free_start);
+    printf("main exit\n");
 }
 
 static void global_init() {
@@ -145,6 +151,8 @@ static void global_init() {
     gpool_init();
     maps_init();
     global_state = INITED;
+    atexit(cleanup);
+
 }
 
 static void check_init() {
