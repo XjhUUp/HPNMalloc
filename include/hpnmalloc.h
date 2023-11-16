@@ -1,9 +1,7 @@
 #ifndef HPNMALLOC_H_
 #define HPNMALLOC_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -130,7 +128,5 @@ void *hpnmalloc(size_t size);
 //释放内存
 void *hpnfree(void *ptr);
 
-#ifdef __cplusplus
-}
-#endif
+
 #endif
