@@ -1,0 +1,1 @@
+python3 ../test.py  ./exp_data/hpn_res21.txt ./exp_data/hpn1_res21.txt ./exp_data/wa_res21.txt ./exp_data/nvm_res21.txt 
