@@ -9,7 +9,7 @@ using namespace std;
 int main(int argc, char **argv) {
     void *p;
     map<size_t, int> mp;
-    int total = 7;
+    int total = 0;
 
 
 //((size_t)p%CHUNK_SIZE-96)%64!=0
